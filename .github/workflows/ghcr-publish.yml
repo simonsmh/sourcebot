@@ -10,7 +10,7 @@ on:
 
 env:
   # Use docker.io for Docker Hub if empty
-  REGISTRY_IMAGE: ghcr.io/sourcebot-dev/sourcebot
+  REGISTRY_IMAGE: ghcr.io/simonsmh/sourcebot
 
 jobs:
   build:
