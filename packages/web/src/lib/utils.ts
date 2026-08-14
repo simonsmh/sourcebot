@@ -370,7 +370,7 @@ export const getCodeHostCommitUrl = ({
         case 'github':
             return `${webUrl}/commit/${commitHash}`;
         case 'gitlab':
-            return `${webUrl}/-/commit/${commitHash}`;
+            return `${webUrl}/commit/${commitHash}`;
         case 'gitea':
             return `${webUrl}/commit/${commitHash}`;
         case 'azuredevops':
@@ -405,7 +405,7 @@ export const getCodeHostBrowseAtBranchUrl = ({
         case 'github':
             return `${webUrl}/tree/${branchName}`;
         case 'gitlab':
-            return `${webUrl}/-/tree/${branchName}`;
+            return `${webUrl}/tree/${branchName}`;
         case 'gitea':
             return `${webUrl}/src/branch/${branchName}`;
         case 'azuredevops':
@@ -442,7 +442,7 @@ export const getCodeHostBrowseFileAtBranchUrl = ({
         case 'github':
             return `${webUrl}/blob/${branchName}/${filePath}`;
         case 'gitlab':
-            return `${webUrl}/-/blob/${branchName}/${filePath}`;
+            return `${webUrl}/blob/${branchName}/${filePath}`;
         case 'gitea':
             return `${webUrl}/src/branch/${branchName}/${filePath}`;
         case 'azuredevops':
