@@ -15,7 +15,7 @@ on:
         type: string
 
 env:
-  REGISTRY_IMAGE: ghcr.io/sourcebot-dev/sourcebot
+  REGISTRY_IMAGE: ghcr.io/simonsmh/sourcebot
 
 jobs:
   merge:
@@ -56,4 +56,3 @@ jobs:
       - name: Inspect image
         run: |
           docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE }}:${{ steps.meta.outputs.version }}
-
