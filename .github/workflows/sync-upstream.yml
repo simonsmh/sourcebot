@@ -1,0 +1,168 @@
+# Keep this fork's main rebased onto upstream main.
+# Always pin vendor/zoekt to simonsmh/zoekt@main (before rebase and after).
+# On non-submodule conflict: abort and fail the job (Actions failure = alert).
+#
+# Requires repo secret SYNC_TOKEN: a classic PAT with scopes:
+#   - repo (contents)
+#   - workflow  (needed because upstream sync may add/change .github/workflows/*)
+# Default GITHUB_TOKEN cannot push workflow file changes.
+name: Sync upstream
+
+on:
+  schedule:
+    # Daily 04:00 UTC
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'simonsmh/sourcebot'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require SYNC_TOKEN
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          if [ -z "${SYNC_TOKEN}" ]; then
+            echo "::error::Set repo secret SYNC_TOKEN (classic PAT with repo + workflow scopes). GITHUB_TOKEN cannot push workflow file changes from upstream."
+            exit 1
+          fi
+
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN }}
+
+      - name: Rebase onto upstream main, pin zoekt fork, force-push
+        env:
+          UPSTREAM_URL: https://github.com/sourcebot-dev/sourcebot.git
+          ZOEKT_FORK_URL: https://github.com/simonsmh/zoekt.git
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          pin_zoekt_fork() {
+            local tip
+            tip="$(git ls-remote "$ZOEKT_FORK_URL" refs/heads/main | awk '{print $1}')"
+            if [ -z "$tip" ]; then
+              echo "Failed to resolve $ZOEKT_FORK_URL main" >&2
+              return 1
+            fi
+
+            git config -f .gitmodules submodule.vendor/zoekt.url "$ZOEKT_FORK_URL"
+            git config -f .gitmodules submodule.vendor/zoekt.branch main
+            git config submodule.vendor/zoekt.url "$ZOEKT_FORK_URL"
+            git submodule sync -- vendor/zoekt
+
+            git fetch --no-tags "$ZOEKT_FORK_URL" "+refs/heads/main:refs/zoekt-fork/main"
+            git submodule update --init --force vendor/zoekt
+            git -C vendor/zoekt fetch --no-tags "$ZOEKT_FORK_URL" main
+            git -C vendor/zoekt checkout --detach "$tip"
+
+            git add .gitmodules vendor/zoekt
+            echo "$tip"
+          }
+
+          resolve_zoekt_only_or_fail() {
+            local unmerged
+            unmerged="$(git ls-files -u | awk '{print $4}' | sort -u || true)"
+            if [ -z "$unmerged" ]; then
+              return 0
+            fi
+            if [ "$unmerged" != "vendor/zoekt" ]; then
+              echo "Conflicts outside vendor/zoekt:" >&2
+              echo "$unmerged" >&2
+              return 1
+            fi
+            pin_zoekt_fork >/dev/null
+            git add .gitmodules vendor/zoekt
+          }
+
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch --no-tags upstream main
+
+          before="$(git rev-parse HEAD)"
+          upstream_sha="$(git rev-parse upstream/main)"
+
+          {
+            echo "## Sync upstream"
+            echo
+            echo "- Fork \`main\` before: \`$before\`"
+            echo "- Upstream \`main\`: \`$upstream_sha\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Front of the job: commit pin to simonsmh/zoekt before rebasing
+          # so the index is clean.
+          zoekt_tip="$(pin_zoekt_fork)"
+          echo "- Pin \`vendor/zoekt\` to simonsmh/zoekt@\`$zoekt_tip\` (pre-rebase)" >> "$GITHUB_STEP_SUMMARY"
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: pin vendor/zoekt to simonsmh/zoekt"
+          fi
+
+          if [ "$(git rev-parse HEAD)" = "$upstream_sha" ]; then
+            echo "Already identical to upstream/main; nothing to do." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          set +e
+          git rebase upstream/main
+          rebase_rc=$?
+          set -e
+
+          while [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; do
+            if ! resolve_zoekt_only_or_fail; then
+              git rebase --abort || true
+              {
+                echo
+                echo "### Rebase conflict"
+                echo
+                echo "Could not rebase \`main\` onto \`upstream/main\` (conflicts beyond \`vendor/zoekt\`)."
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            set +e
+            GIT_EDITOR=true git rebase --continue
+            rebase_rc=$?
+            set -e
+          done
+
+          if [ "$rebase_rc" -ne 0 ]; then
+            git rebase --abort || true
+            {
+              echo
+              echo "### Rebase conflict"
+              echo
+              echo "Could not rebase \`main\` onto \`upstream/main\`. Resolve locally, then re-run this workflow."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          # After rebase: pin again so tip tracks simonsmh/zoekt@main.
+          zoekt_tip="$(pin_zoekt_fork)"
+          echo "- Pin \`vendor/zoekt\` to simonsmh/zoekt@\`$zoekt_tip\` (post-rebase)" >> "$GITHUB_STEP_SUMMARY"
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: pin vendor/zoekt to simonsmh/zoekt"
+          fi
+
+          after="$(git rev-parse HEAD)"
+          echo "- Fork \`main\` after sync: \`$after\`" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$after" = "$before" ]; then
+            echo "Sync produced no change; skip push." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          git push --force-with-lease origin HEAD:main
+          echo "Force-pushed rebased \`main\` to origin." | tee -a "$GITHUB_STEP_SUMMARY"
